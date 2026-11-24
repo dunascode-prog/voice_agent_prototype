@@ -36,7 +36,7 @@ def agent_version_spec(settings: Settings) -> AgentVersionSpec:
     return AgentVersionSpec(
         playbook=settings.playbook,
         prompt_hash=prompt_hash(load_prompt(settings.playbook)),
-        llm_model=settings.llm_model,
+        llm_model=settings.llm_model_id,
         llm_effort=settings.llm_effort,
         stt_model=f"deepgram/{settings.deepgram_model}/{settings.deepgram_language}",
         tts_voice_id=f"cartesia/{settings.cartesia_voice_id_en}",

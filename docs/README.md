@@ -2,16 +2,17 @@
 
 A real-time phone agent (inbound and outbound) built on **Python + Pipecat + Twilio Media Streams**, with **Deepgram** STT, **Claude** as the LLM, and **Cartesia** TTS (ElevenLabs as fallback), deployed as Docker containers on **AWS ECS Fargate**.
 
-> **Status: phase 2 (persistence + latency).** A caller can phone the Twilio number and talk to the agent (Deepgram → Claude → Cartesia, with barge-in and smart-turn end-of-turn detection), and outbound calls can be started through the API. Every call is saved with its turns, redacted transcript, per-stage latency, token usage, status history and dual-channel recording. Not yet built: tools (calendar/CRM), transfers, voicemail detection, the post-call worker and the dialer.
+> **Status: phase 2 + Bedrock.** A caller can phone the Twilio number and talk to the agent (Deepgram → Claude → Cartesia, with barge-in and smart-turn end-of-turn detection), and outbound calls can be started through the API. Every call is saved with its turns, redacted transcript, per-stage latency, token usage, status history and dual-channel recording. Claude runs either on the Claude API or on Amazon Bedrock (`LLM_PROVIDER`). Not yet built: tools (calendar/CRM), transfers, voicemail detection, the post-call worker and the dialer.
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Gateway webhooks + signed media stream, Pipecat pipeline, outbound API, Docker, tests | done (PR #1) |
-| 2 | Postgres + Redis, call/turn persistence, per-stage latency metrics, recording, CI | **this PR** |
-| 3 | Tools: Google Calendar + HubSpot, booking flow with idempotency | next |
+| 2 | Postgres + Redis, call/turn persistence, per-stage latency metrics, recording, CI | done (PR #2) |
+| 2b | Claude on Amazon Bedrock (`LLM_PROVIDER=bedrock`), `voice-llm-check` | **this PR** |
+| 3 | Tools: Google Calendar + HubSpot, booking flow with idempotency | |
 | 4 | Transfers, voicemail detection, campaign dialer | |
 | 5 | Worker: transcripts, redaction, LLM-judge scoring; simulated-caller evals | |
-| 6 | AWS: Terraform, ECS, CI/CD | |
+| 6 | AWS demo: Terraform, ECS Fargate, ALB (HTTPS/WSS), RDS, ElastiCache, Secrets Manager | next |
 
 | Document | Contents |
 |---|---|
@@ -44,12 +45,13 @@ voice-agent-prototype/
 │   ├── dev.py                  # Single-port local server (Gateway + Agent on :8080)
 │   ├── services.py             # Per-process DB + Redis resources, best-effort persistence
 │   ├── agent_version.py        # Fingerprint of prompt/model/voice/turn config per call
+│   ├── llm_check.py            # voice-llm-check: one real request to the configured LLM provider
 │   ├── gateway/                # FastAPI: Twilio webhooks, TwiML, outbound-call API
 │   ├── telephony/              # Telephony adapter (Twilio): transfer, AMD, recording, DTMF
 │   ├── pipeline/               # Pipecat pipeline assembly per call + barge-in wiring
 │   ├── turn/                   # VAD, smart-turn, interruption + silence policy
 │   ├── stt/                    # Deepgram config + STT failover
-│   ├── llm/                    # Claude adapter (Anthropic API / Bedrock), caching, tool loop
+│   ├── llm/                    # Tool loop and failover (later); provider selection is in pipeline/llm.py
 │   ├── tts/                    # Cartesia / ElevenLabs config, voices per language
 │   ├── tools/                  # Tool schemas + executor (timeouts, idempotency)
 │   │   ├── calendar/           # Google Calendar (then Microsoft 365 / Cal.com)
@@ -109,6 +111,31 @@ ngrok http 8080              # copy the https URL into PUBLIC_BASE_URL and wss:/
 ```
 
 Generate random values for `INTERNAL_API_TOKEN` and `STREAM_TOKEN_SIGNING_KEY`, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+
+#### Claude on Amazon Bedrock instead of the Claude API
+
+The pipeline is the same either way; only the client changes. On Bedrock, requests are signed with your AWS credentials, so no `ANTHROPIC_API_KEY` is needed and no AWS keys go in `.env`.
+
+1. In the AWS console, open **Amazon Bedrock → Model access** in your region (default `us-east-1`) and enable **Claude Opus 5.5**. Anthropic models ask for a short use-case form the first time.
+2. Give your AWS identity permission to call it (`bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`; for a demo account, an admin user is fine).
+3. Log in with the AWS CLI and note the profile name: `aws configure sso` (preferred) or `aws configure`. Check it with `aws sts get-caller-identity --profile <name>`.
+4. In `.env`:
+   ```bash
+   LLM_PROVIDER=bedrock
+   AWS_REGION=us-east-1
+   AWS_PROFILE=<name>          # leave empty to use the default credential chain
+   LLM_MODEL=claude-opus-5-5   # the anthropic. prefix is added for Bedrock
+   ```
+5. Check access before placing a call. This sends two short real requests (a few cents at most) shaped like the pipeline's, and prints time to first token and prompt-cache reads:
+   ```bash
+   uv run voice-llm-check
+   # provider=bedrock in us-east-1 (profile demo) model=anthropic.claude-opus-5-5 effort=low
+   # cold: ttft=...ms total=...ms in=... cache_read=0 cache_write=... out=... stop=end_turn
+   # warm: ttft=...ms ... cache_read=...
+   ```
+   A `403` means model access or IAM permission is missing; `ProfileNotFound` or `NoCredentialsError` means the AWS CLI login is missing.
+
+In the AWS demo (phase 6) the containers use the ECS task role instead of a profile.
 
 ### 3a. Run without Docker (single port)
 
@@ -213,14 +240,15 @@ All variables are listed in [`../.env.example`](../.env.example). In AWS, secret
 | `RECORDING_ENABLED` | agent | no | Start a dual-channel recording on every call, default `true` |
 | `DEEPGRAM_API_KEY` | agent, worker | **yes** | STT |
 | `DEEPGRAM_MODEL` / `DEEPGRAM_LANGUAGE` | agent | no | `nova-3` / `multi` |
-| `LLM_PROVIDER` | agent, worker | no | `anthropic` or `bedrock` |
-| `ANTHROPIC_API_KEY` | agent, worker | **yes** | Claude via the Anthropic API |
-| `LLM_MODEL` | agent | no | `claude-opus-5-5` (`anthropic.claude-opus-5-5` on Bedrock) |
+| `LLM_PROVIDER` | agent, worker | no | `anthropic` (Claude API, default) or `bedrock` (Amazon Bedrock, AWS credentials) |
+| `ANTHROPIC_API_KEY` | agent, worker | **yes** (if `anthropic`) | Claude API key; not needed on Bedrock |
+| `LLM_MODEL` | agent | no | `claude-opus-5-5`; on Bedrock the `anthropic.` prefix is added automatically (ids that already contain it, e.g. `us.anthropic.…` inference profiles, are used as is) |
 | `LLM_EFFORT` | agent | no | `low` for live turns |
 | `LLM_MAX_TOKENS` | agent | no | Max tokens per reply, default 1024 |
-| `LLM_FALLBACK_PROVIDER` | agent | no | `bedrock` |
+| `LLM_FALLBACK_PROVIDER` | agent | no | Not used yet; automatic failover between providers comes later |
 | `JUDGE_MODEL` | worker | no | Model used for post-call LLM-judge scoring |
-| `AWS_REGION` | all | no | `us-east-1` |
+| `AWS_REGION` | all | **yes** (if `bedrock`) | Bedrock region, default `us-east-1` |
+| `AWS_PROFILE` | agent | no | AWS CLI profile for local runs on Bedrock; empty = default credential chain (env vars, SSO cache, ECS task role) |
 | `CARTESIA_API_KEY` | agent | **yes** | Primary TTS |
 | `CARTESIA_VOICE_ID_EN` / `CARTESIA_VOICE_ID_ES` | agent | no | Voices per language |
 | `ELEVENLABS_API_KEY` | agent | **yes** | Fallback TTS |
