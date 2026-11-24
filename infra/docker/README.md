@@ -2,4 +2,4 @@
 
 Dockerfiles for gateway, agent, and worker images; docker-compose for local dev.
 
-> Placeholder: no implementation yet. The design lives in `docs/ARCHITECTURE.md` and `docs/DATAFLOW.md` at the repo root.
+**Phase 1:** `Dockerfile` (one image for both services), `docker-compose.yml` and `Caddyfile` (local proxy that routes `/media` to the agent).

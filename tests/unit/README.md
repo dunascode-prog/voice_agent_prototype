@@ -2,4 +2,4 @@
 
 Unit tests for adapters, tool executor, turn policy.
 
-> Placeholder: no implementation yet. The design lives in `docs/ARCHITECTURE.md` and `docs/DATAFLOW.md` at the repo root.
+**Phase 1:** tests for the stream token, gateway webhooks and outbound API, agent WebSocket auth, pipeline assembly and the dev server.

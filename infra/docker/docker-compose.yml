@@ -1,0 +1,39 @@
+# Local development stack (phase 1). Run from the repo root:
+#   docker compose -f infra/docker/docker-compose.yml up --build
+# Postgres, Redis and LocalStack are added in the phases that use them.
+name: voice-agent
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: ["voice-gateway"]
+    env_file: ../../.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: ["voice-agent"]
+    env_file: ../../.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  proxy:
+    image: caddy:2.8-alpine
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - gateway
+      - agent
