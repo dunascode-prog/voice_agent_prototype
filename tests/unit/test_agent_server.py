@@ -50,7 +50,7 @@ def test_rejects_non_twilio_first_message():
 def test_valid_token_runs_pipeline(monkeypatch):
     calls = []
 
-    async def fake_run_call(websocket, start, settings):
+    async def fake_run_call(websocket, start, settings, services=None, call_id=None):
         calls.append(start)
         await websocket.close()
 

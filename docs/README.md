@@ -2,13 +2,13 @@
 
 A real-time phone agent (inbound and outbound) built on **Python + Pipecat + Twilio Media Streams**, with **Deepgram** STT, **Claude** as the LLM, and **Cartesia** TTS (ElevenLabs as fallback), deployed as Docker containers on **AWS ECS Fargate**.
 
-> **Status: phase 1 (scaffold).** A caller can phone the Twilio number and talk to the agent (Deepgram → Claude → Cartesia, with barge-in and smart-turn end-of-turn detection), and outbound calls can be started through the API. Not yet built: database, recording, tools (calendar/CRM), transfers, voicemail detection, the worker and the dialer.
+> **Status: phase 2 (persistence + latency).** A caller can phone the Twilio number and talk to the agent (Deepgram → Claude → Cartesia, with barge-in and smart-turn end-of-turn detection), and outbound calls can be started through the API. Every call is saved with its turns, redacted transcript, per-stage latency, token usage, status history and dual-channel recording. Not yet built: tools (calendar/CRM), transfers, voicemail detection, the post-call worker and the dialer.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Gateway webhooks + signed media stream, Pipecat pipeline, outbound API, Docker, tests | **this PR** |
-| 2 | Postgres + Redis, call/turn persistence, per-stage latency metrics, recording | next |
-| 3 | Tools: Google Calendar + HubSpot, booking flow with idempotency | |
+| 1 | Gateway webhooks + signed media stream, Pipecat pipeline, outbound API, Docker, tests | done (PR #1) |
+| 2 | Postgres + Redis, call/turn persistence, per-stage latency metrics, recording, CI | **this PR** |
+| 3 | Tools: Google Calendar + HubSpot, booking flow with idempotency | next |
 | 4 | Transfers, voicemail detection, campaign dialer | |
 | 5 | Worker: transcripts, redaction, LLM-judge scoring; simulated-caller evals | |
 | 6 | AWS: Terraform, ECS, CI/CD | |
@@ -42,6 +42,8 @@ voice-agent-prototype/
 ├── docs/                       # Architecture, dataflow, evaluation docs (this folder)
 ├── src/voice_agent/
 │   ├── dev.py                  # Single-port local server (Gateway + Agent on :8080)
+│   ├── services.py             # Per-process DB + Redis resources, best-effort persistence
+│   ├── agent_version.py        # Fingerprint of prompt/model/voice/turn config per call
 │   ├── gateway/                # FastAPI: Twilio webhooks, TwiML, outbound-call API
 │   ├── telephony/              # Telephony adapter (Twilio): transfer, AMD, recording, DTMF
 │   ├── pipeline/               # Pipecat pipeline assembly per call + barge-in wiring
@@ -54,7 +56,7 @@ voice-agent-prototype/
 │   │   ├── crm/                # HubSpot (then Salesforce / Zoho) behind one interface
 │   │   └── lookup/             # Customer, order, knowledge-base lookups
 │   ├── prompts/                # Versioned playbook prompts
-│   ├── storage/                # Postgres, S3 and Redis access
+│   ├── storage/                # Models, repository, live state (Redis), retention CLI
 │   ├── observability/          # OpenTelemetry, metrics, PII-safe logging
 │   ├── worker/                 # Post-call jobs: recordings, transcripts, scoring, CRM sync
 │   ├── campaigns/              # Outbound dialer: windows, DNC, pacing, retries
@@ -72,6 +74,8 @@ voice-agent-prototype/
 ├── scripts/                    # ngrok bootstrap, Twilio number setup, seed data
 ├── pyproject.toml              # Dependencies (uv), ruff and pytest config
 ├── uv.lock                     # Locked dependency versions
+├── alembic.ini, migrations/    # Database migrations (Alembic)
+├── .github/workflows/ci.yml    # CI: lint, tests on SQLite and on Postgres + Redis, Docker build
 ├── .env.example                # Every environment variable (no real secrets)
 └── README.md                   # Points to docs/README.md
 ```
@@ -112,11 +116,15 @@ Generate random values for `INTERNAL_API_TOKEN` and `STREAM_TOKEN_SIGNING_KEY`, 
 uv run voice-dev             # Gateway + Agent routes on http://127.0.0.1:8080
 ```
 
+With the defaults (`DATABASE_URL` pointing at SQLite, `REDIS_URL` empty), calls are saved to `voice_local.db` in the repo folder and live call state is kept in memory. The tables are created on start-up.
+
 ### 3b. Or run with Docker (separate services behind a proxy, like AWS)
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml up --build    # proxy on :8080
 ```
+
+This also starts Postgres 16 and Redis 7 and runs `alembic upgrade head` before the services start.
 
 ### 4. Point your Twilio number at the gateway
 
@@ -124,23 +132,54 @@ In the Twilio console, under **Phone Numbers → your number → Voice configura
 * "A call comes in" → Webhook → `POST {PUBLIC_BASE_URL}/twilio/voice`
 * "Call status changes" → `POST {PUBLIC_BASE_URL}/twilio/status`
 
+Recording callbacks need no console setup: the agent registers `{PUBLIC_BASE_URL}/twilio/recording` when it starts each recording.
+
 ### 5. Call it
 
 * **Inbound:** phone your Twilio number. The agent greets you, says it is an AI and that the call may be recorded, and runs the booking playbook (`src/voice_agent/prompts/booking.md`).
 * **Outbound:**
 
   ```bash
-  curl -X POST "$PUBLIC_BASE_URL/calls/outbound"     -H "Authorization: Bearer $INTERNAL_API_TOKEN"     -H "Content-Type: application/json"     -d '{"to": "+15555550123"}'
+  curl -X POST "$PUBLIC_BASE_URL/calls/outbound" \
+    -H "Authorization: Bearer $INTERNAL_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"to": "+15555550123"}'
   ```
 
-  Phase 1 has no consent or DNC checks yet, so only call your own phone.
+  There are no consent or DNC checks yet (phase 4), so only call your own phone.
 
-### How a call flows in phase 1
+### How a call flows
 
-1. Twilio posts to `/twilio/voice`. The Gateway checks the `X-Twilio-Signature` against `PUBLIC_BASE_URL` + path, then answers with TwiML `<Connect><Stream>` to `MEDIA_WS_URL`, carrying a signed token that expires after `STREAM_TOKEN_TTL_S`.
-2. Twilio opens the WebSocket to `/media`. The Agent reads the `start` event and checks that the token is valid and matches this `CallSid`; otherwise it closes the socket (code 1008).
+1. Twilio posts to `/twilio/voice`. The Gateway checks the `X-Twilio-Signature` against `PUBLIC_BASE_URL` + path, saves the `Call` (idempotent on `CallSid`), writes live state `call:{CallSid}` to Redis, and answers with TwiML `<Connect><Stream>` to `MEDIA_WS_URL`, carrying a signed token that expires after `STREAM_TOKEN_TTL_S`.
+2. Twilio opens the WebSocket to `/media`. The Agent reads the `start` event and checks that the token is valid and matches this `CallSid`; otherwise it closes the socket (code 1008). It looks up the call id (Redis first, then the database) and starts a dual-channel recording through the Twilio REST API.
 3. The Agent runs the Pipecat pipeline for the call: Twilio audio → Deepgram (Nova-3, multilingual) → Silero VAD + smart-turn v3 → Claude (`LLM_MODEL`, effort `LLM_EFFORT`, prompt caching on) → Cartesia → Twilio. When the caller speaks over the agent, LLM and TTS are cancelled and Twilio's audio buffer is cleared.
-4. When the caller hangs up, the stream closes and the pipeline is cancelled.
+4. After every agent turn, a `Turn` row is saved with its latency breakdown (voice-to-voice, user-turn/end-of-turn time, STT, LLM time-to-first-token, sentence aggregation, TTS time-to-first-byte), its token usage and the redacted transcript. Writes go through a background queue, so the database never blocks the audio.
+5. When the caller hangs up, the stream closes, the pipeline is cancelled, and per-call rollups are written: greeting latency, p50/p95 voice-to-voice, interruptions and tokens. Twilio then posts `/twilio/status` (final status, duration) and `/twilio/recording` (the recording file).
+
+Database or Redis failures are logged and never stop a call.
+
+### Looking at the data
+
+```bash
+# SQLite (no Docker)
+sqlite3 voice_local.db "select seq, speaker, kind, v2v_ms, llm_ttft_ms, tts_ttfb_ms, interrupted from turns order by ended_at desc limit 20;"
+
+# Postgres (Docker)
+docker compose -f infra/docker/docker-compose.yml exec postgres psql -U voice -c \
+  "select twilio_call_sid, status, duration_s, greeting_ms, v2v_p50_ms, v2v_p95_ms, agent_turns, interruption_count from calls order by started_at desc limit 10;"
+```
+
+Each agent turn's log line also shows its stage latencies, e.g. `turn 3 v2v=742ms stt=61 llm=284 tts=93 interrupted=False`.
+
+### Database migrations and retention
+
+```bash
+uv run alembic upgrade head                                   # apply migrations (DATABASE_URL)
+uv run alembic revision --autogenerate -m "describe change"   # after editing storage/models.py
+uv run voice-maintenance purge-raw --days 30                  # remove unredacted transcript text past retention
+```
+
+Postgres schemas only change through Alembic. A test checks that the migrations build exactly the schema the models describe.
 
 ### Troubleshooting
 
@@ -171,7 +210,7 @@ All variables are listed in [`../.env.example`](../.env.example). In AWS, secret
 | `TWILIO_VALIDATE_SIGNATURES` | gateway | no | Webhook signature check, default `true`; never disable outside tests |
 | `TRANSFER_DEFAULT_NUMBER` | gateway | no | Human queue / fallback number (E.164) |
 | `AMD_ENABLED` | gateway | no | Enable async AMD on outbound calls |
-| `RECORDING_ENABLED` | gateway | no | Enable dual-channel recording |
+| `RECORDING_ENABLED` | agent | no | Start a dual-channel recording on every call, default `true` |
 | `DEEPGRAM_API_KEY` | agent, worker | **yes** | STT |
 | `DEEPGRAM_MODEL` / `DEEPGRAM_LANGUAGE` | agent | no | `nova-3` / `multi` |
 | `LLM_PROVIDER` | agent, worker | no | `anthropic` or `bedrock` |
@@ -191,8 +230,9 @@ All variables are listed in [`../.env.example`](../.env.example). In AWS, secret
 | `HUBSPOT_PRIVATE_APP_TOKEN` | agent (tools), worker | **yes** | CRM |
 | `SALESFORCE_*`, `ZOHO_*` | agent (tools), worker | **yes** | Placeholders for later adapters |
 | `CRM_PROVIDER` | agent, worker | no | `hubspot`, `salesforce` or `zoho` |
-| `DATABASE_URL` | gateway, agent, worker, dialer | **yes** | Postgres DSN |
-| `REDIS_URL` | gateway, agent, dialer | **yes** (if auth) | Redis DSN |
+| `DATABASE_URL` | gateway, agent, worker, dialer | **yes** (Postgres) | `postgresql://...` (the asyncpg driver is added automatically) or `sqlite+aiosqlite:///./voice_local.db` for local dev |
+| `REDIS_URL` | gateway, agent, dialer | **yes** (if auth) | Redis DSN; empty = in-memory live state, only valid with `voice-dev` |
+| `LIVE_STATE_TTL_S` | gateway | no | Lifetime of the `call:{CallSid}` live state, default 7200 |
 | `S3_BUCKET_RECORDINGS` / `S3_BUCKET_TRANSCRIPTS` | worker | no | Bucket names |
 | `SQS_QUEUE_URL_CALL_EVENTS` | gateway, agent, worker | no | Post-call queue |
 | `AWS_ENDPOINT_URL` | all | no | LocalStack URL for local dev only |

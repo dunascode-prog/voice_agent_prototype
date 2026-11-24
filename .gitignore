@@ -27,6 +27,8 @@ build/
 Thumbs.db
 
 # Local artifacts
+*.db
+*.db-journal
 *.log
 recordings/
 tmp/
