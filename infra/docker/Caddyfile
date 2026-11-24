@@ -1,0 +1,10 @@
+# Local reverse proxy: one public URL (ngrok -> :8080) for both services, mirroring the
+# AWS ALB rules. /media (WebSocket) goes to the agent, everything else to the gateway.
+:8080 {
+	handle /media* {
+		reverse_proxy agent:8001
+	}
+	handle {
+		reverse_proxy gateway:8000
+	}
+}

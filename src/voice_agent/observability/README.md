@@ -2,4 +2,4 @@
 
 OpenTelemetry setup, per-stage latency metrics, structured logging with PII redaction, LLM trace export.
 
-> Placeholder: no implementation yet. The design lives in `docs/ARCHITECTURE.md` and `docs/DATAFLOW.md` at the repo root.
+**Phase 1:** `logging.py` (loguru setup, phone-number masking). OpenTelemetry and latency metrics come in phase 2.
