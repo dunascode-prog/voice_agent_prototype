@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: Lint + tests (SQLite, fakeredis)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.13.4"
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests migrations
+      - run: uv run ruff format --check src tests migrations
+      - run: uv run pytest
+
+  postgres-redis:
+    name: Tests on Postgres 16 + Redis 7
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: voice
+          POSTGRES_PASSWORD: voice
+          POSTGRES_DB: voice
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U voice -d voice"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://voice:voice@localhost:5432/voice
+      TEST_DATABASE_URL: postgresql+asyncpg://voice:voice@localhost:5432/voice
+      TEST_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.13.4"
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - name: Migrations round trip
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - run: uv run pytest
+
+  docker:
+    name: Docker image + compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f infra/docker/Dockerfile -t voice-agent:ci .
+      - name: Image starts and imports
+        run: |
+          docker run --rm voice-agent:ci python -c "import voice_agent.gateway.app, voice_agent.pipeline.server; print('ok')"
+          docker run --rm voice-agent:ci alembic --help > /dev/null
+      - name: Compose file is valid
+        run: |
+          cp .env.example .env
+          docker compose -f infra/docker/docker-compose.yml config --quiet

@@ -46,6 +46,26 @@ class Settings(BaseSettings):
     # --- Agent behaviour ---
     playbook: str = "booking"
     vad_stop_secs: float = 0.2
+    recording_enabled: bool = True
+
+    # --- Storage ---
+    # Postgres in Docker/AWS; SQLite is fine for single-process local dev and tests.
+    database_url: str = "sqlite+aiosqlite:///./voice_local.db"
+    # Empty = in-process memory store (only valid when gateway and agent share a process).
+    redis_url: str = ""
+    live_state_ttl_s: int = 7200
+
+    @property
+    def async_database_url(self) -> str:
+        """Add the async driver to plain URLs, e.g. postgresql:// -> postgresql+asyncpg://."""
+        url = self.database_url
+        if url.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + url.removeprefix("postgresql://")
+        if url.startswith("postgres://"):
+            return "postgresql+asyncpg://" + url.removeprefix("postgres://")
+        if url.startswith("sqlite:///"):
+            return "sqlite+aiosqlite:///" + url.removeprefix("sqlite:///")
+        return url
 
     def missing(self, *names: str) -> list[str]:
         """Return the env var names (upper case) of settings that are empty."""

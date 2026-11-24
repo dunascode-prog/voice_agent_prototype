@@ -11,8 +11,10 @@ from voice_agent.config import get_settings
 from voice_agent.gateway.app import app as gateway_app
 from voice_agent.observability.logging import configure_logging
 from voice_agent.pipeline.server import app as agent_app
+from voice_agent.services import lifespan_for
 
-app = FastAPI(title="voice-dev", version="0.1.0")
+# One Services instance for both route sets, so the in-memory live state is shared.
+app = FastAPI(title="voice-dev", version="0.2.0", lifespan=lifespan_for(get_settings))
 _seen: set[str] = set()
 for route in [*gateway_app.router.routes, *agent_app.router.routes]:
     path = getattr(route, "path", None)

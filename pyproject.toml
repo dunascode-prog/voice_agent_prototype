@@ -11,6 +11,11 @@ dependencies = [
     "pydantic-settings>=2.4",
     "twilio>=9.0",
     "python-multipart>=0.0.9",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29",
+    "aiosqlite>=0.20",
+    "alembic>=1.13",
+    "redis>=5.0",
 ]
 
 [dependency-groups]
@@ -19,12 +24,14 @@ dev = [
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
     "ruff>=0.6",
+    "fakeredis>=2.23",
 ]
 
 [project.scripts]
 voice-gateway = "voice_agent.gateway.app:main"
 voice-agent = "voice_agent.pipeline.server:main"
 voice-dev = "voice_agent.dev:main"
+voice-maintenance = "voice_agent.storage.maintenance:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -54,4 +61,4 @@ ignore = ["S101"]  # assert is fine in tests
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Header"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S314"]  # fake secrets; parsing our own TwiML
+"tests/**" = ["S105", "S106", "S314", "S603"]  # fake secrets, own TwiML, fixed alembic argv

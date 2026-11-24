@@ -599,7 +599,7 @@ flowchart LR
 | Idempotency keys + tool results | Redis | Minimal | 24 h |
 | Call, Turn, Outcome, Transfer, CallEvent rows | Postgres | Phone numbers only | 2 years (metadata, analytics) |
 | Transcript segments (redacted text) | Postgres | Redacted | 1 year |
-| Raw transcripts (unredacted) | S3 `transcripts/raw/` | **Yes** | **30 days**, then lifecycle delete |
+| Raw transcripts (unredacted) | S3 `transcripts/raw/` (until phase 5: the `transcript_segments.text_raw` column in Postgres, purged daily by `voice-maintenance purge-raw`) | **Yes** | **30 days**, then lifecycle delete |
 | Redacted transcripts (JSON) | S3 `transcripts/redacted/` | Redacted | 1 year |
 | Call recordings (dual-channel) | S3 `recordings/` | **Yes (voice = biometric in some states)** | **90 days**, then delete. Deleted from Twilio right after the S3 copy is verified |
 | Tool invocation args/results | Postgres (redacted JSONB) | Redacted | 1 year |

@@ -1,15 +1,60 @@
-# Local development stack (phase 1). Run from the repo root:
+# Local development stack. Run from the repo root:
 #   docker compose -f infra/docker/docker-compose.yml up --build
-# Postgres, Redis and LocalStack are added in the phases that use them.
+# LocalStack (S3, SQS) is added with the post-call worker in phase 5.
 name: voice-agent
 
+x-app: &app
+  build:
+    context: ../..
+    dockerfile: infra/docker/Dockerfile
+  env_file: ../../.env
+  environment:
+    # Override .env so containers use the compose services, whatever .env says.
+    DATABASE_URL: postgresql://voice:voice@postgres:5432/voice
+    REDIS_URL: redis://redis:6379/0
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: voice
+      POSTGRES_PASSWORD: voice
+      POSTGRES_DB: voice
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voice -d voice"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   gateway:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
+    <<: *app
     command: ["voice-gateway"]
-    env_file: ../../.env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
       interval: 10s
@@ -17,11 +62,13 @@ services:
       retries: 3
 
   agent:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
+    <<: *app
     command: ["voice-agent"]
-    env_file: ../../.env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz')"]
       interval: 10s
@@ -37,3 +84,6 @@ services:
     depends_on:
       - gateway
       - agent
+
+volumes:
+  pgdata:
