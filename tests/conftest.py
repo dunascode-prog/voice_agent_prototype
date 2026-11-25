@@ -40,6 +40,10 @@ def settings() -> Settings:
         cartesia_api_key=SecretStr("cartesia-test"),
         cartesia_voice_id_en="voice-test",
         recording_enabled=False,
+        # Pin these so a developer's shell (LLM_PROVIDER, AWS_PROFILE) can't change test results.
+        llm_provider="anthropic",
+        aws_region="us-east-1",
+        aws_profile="",
     )
 
 

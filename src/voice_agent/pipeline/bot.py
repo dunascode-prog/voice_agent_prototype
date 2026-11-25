@@ -30,7 +30,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.serializers.twilio import TwilioFrameSerializer
-from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.transports.websocket.fastapi import (
@@ -41,6 +40,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from voice_agent.config import Settings
 from voice_agent.pipeline.call_recorder import CallRecorder, UsageObserver
+from voice_agent.pipeline.llm import build_llm
 from voice_agent.prompts import load_prompt, prompt_hash
 from voice_agent.services import Services, best_effort
 from voice_agent.storage.repository import CallRepository
@@ -97,16 +97,7 @@ def build_call_pipeline(
     )
 
     system_prompt = load_prompt(settings.playbook)
-    llm = AnthropicLLMService(
-        api_key=settings.anthropic_api_key.get_secret_value(),
-        settings=AnthropicLLMService.Settings(
-            model=settings.llm_model,
-            system_instruction=system_prompt,
-            effort=settings.llm_effort,
-            max_tokens=settings.llm_max_tokens,
-            enable_prompt_caching=True,
-        ),
-    )
+    llm = build_llm(settings, system_prompt)
 
     tts = CartesiaTTSService(
         api_key=settings.cartesia_api_key.get_secret_value(),
@@ -193,7 +184,8 @@ async def run_call(
     repo = services.repo if services is not None and call_id is not None else None
     call = build_call_pipeline(websocket, start, settings, call_id=call_id, repo=repo)
     logger.info(
-        f"call {start.call_sid}: pipeline starting (model={settings.llm_model}, "
+        f"call {start.call_sid}: pipeline starting "
+        f"(llm={settings.llm_provider}/{settings.llm_model_id}, "
         f"playbook={settings.playbook}, prompt={call.prompt_version}, call_id={call_id})"
     )
     if repo is not None:

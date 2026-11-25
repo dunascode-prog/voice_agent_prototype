@@ -70,3 +70,22 @@ def test_missing_provider_keys_closes_with_error(settings):
     settings.deepgram_api_key = SecretStr("")
     token = stream_token.mint("CA123", "signing-key", ttl_s=60)
     expect_close([start_event(token=token)], 1011)
+
+
+def test_bedrock_calls_do_not_need_an_anthropic_key(settings, monkeypatch):
+    from pydantic import SecretStr
+
+    calls = []
+
+    async def fake_run_call(websocket, start, settings, services=None, call_id=None):
+        calls.append(start)
+        await websocket.close()
+
+    import voice_agent.pipeline.bot as bot
+
+    monkeypatch.setattr(bot, "run_call", fake_run_call)
+    settings.llm_provider = "bedrock"
+    settings.anthropic_api_key = SecretStr("")
+    token = stream_token.mint("CA123", "signing-key", ttl_s=60)
+    expect_close([start_event(token=token)], 1000)
+    assert len(calls) == 1

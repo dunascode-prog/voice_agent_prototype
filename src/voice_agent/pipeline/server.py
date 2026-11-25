@@ -14,13 +14,6 @@ from voice_agent.telephony import stream_token
 from voice_agent.telephony.media_stream import StreamStartError, read_stream_start
 
 START_TIMEOUT_S = 10
-REQUIRED_FOR_CALLS = (
-    "stream_token_signing_key",
-    "deepgram_api_key",
-    "anthropic_api_key",
-    "cartesia_api_key",
-    "cartesia_voice_id_en",
-)
 
 app = FastAPI(title="voice-agent", version="0.2.0", lifespan=lifespan_for(get_settings))
 
@@ -55,7 +48,7 @@ async def media(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    missing = settings.missing(*REQUIRED_FOR_CALLS)
+    missing = settings.missing(*settings.required_for_calls())
     if missing:
         logger.error(f"call {start.call_sid}: cannot start pipeline, missing config {missing}")
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)

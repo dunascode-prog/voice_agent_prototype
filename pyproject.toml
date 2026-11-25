@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pipecat-ai[anthropic,deepgram,cartesia,silero,websocket]>=1.17,<2",
+    # Claude on Amazon Bedrock (SigV4 signing via boto3)
+    "anthropic[bedrock]>=1.17,<2",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic-settings>=2.4",
@@ -32,6 +34,7 @@ voice-gateway = "voice_agent.gateway.app:main"
 voice-agent = "voice_agent.pipeline.server:main"
 voice-dev = "voice_agent.dev:main"
 voice-maintenance = "voice_agent.storage.maintenance:main"
+voice-llm-check = "voice_agent.llm_check:main"
 
 [build-system]
 requires = ["hatchling"]

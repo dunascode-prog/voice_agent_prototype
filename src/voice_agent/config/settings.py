@@ -4,6 +4,7 @@ Names match `.env.example`. In AWS, secrets are injected by ECS from Secrets Man
 """
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,10 +35,17 @@ class Settings(BaseSettings):
     deepgram_language: str = "multi"
 
     # --- LLM ---
+    # "anthropic" = Claude API with ANTHROPIC_API_KEY; "bedrock" = Claude on Amazon Bedrock,
+    # signed with AWS credentials (profile locally, ECS task role in AWS).
+    llm_provider: Literal["anthropic", "bedrock"] = "anthropic"
     anthropic_api_key: SecretStr = SecretStr("")
     llm_model: str = "claude-opus-5-5"
     llm_effort: str = "low"
     llm_max_tokens: int = 1024
+    aws_region: str = "us-east-1"
+    # Named profile from ~/.aws for local runs. Empty = default AWS credential chain
+    # (env vars, SSO cache, or the ECS task role).
+    aws_profile: str = ""
 
     # --- TTS ---
     cartesia_api_key: SecretStr = SecretStr("")
@@ -66,6 +74,25 @@ class Settings(BaseSettings):
         if url.startswith("sqlite:///"):
             return "sqlite+aiosqlite:///" + url.removeprefix("sqlite:///")
         return url
+
+    @property
+    def llm_model_id(self) -> str:
+        """Model id as the provider expects it: Bedrock ids carry an `anthropic.` prefix."""
+        model = self.llm_model
+        if self.llm_provider == "bedrock" and "anthropic." not in model:
+            return f"anthropic.{model}"
+        return model
+
+    def required_for_calls(self) -> tuple[str, ...]:
+        """Settings that must be set before the agent can take a call."""
+        llm = ("anthropic_api_key",) if self.llm_provider == "anthropic" else ("aws_region",)
+        return (
+            "stream_token_signing_key",
+            "deepgram_api_key",
+            *llm,
+            "cartesia_api_key",
+            "cartesia_voice_id_en",
+        )
 
     def missing(self, *names: str) -> list[str]:
         """Return the env var names (upper case) of settings that are empty."""
