@@ -27,9 +27,9 @@ HINTS = {
     "bedrock": {
         anthropic.AuthenticationError: "AWS credentials were rejected. Check AWS_PROFILE "
         "(`aws sts get-caller-identity --profile <name>`) or run `aws sso login`.",
-        anthropic.PermissionDeniedError: "The AWS identity can't invoke this model. Enable "
-        "Claude in the Bedrock console (Model access) for AWS_REGION, and allow "
-        "bedrock:InvokeModel* in the IAM policy.",
+        anthropic.PermissionDeniedError: "The AWS identity can't call Claude on Bedrock. Allow "
+        "bedrock-mantle:CreateInference in its IAM policy or SSO permission set "
+        "(infra/iam/bedrock-claude-policy.json), and enable Claude model access for AWS_REGION.",
         anthropic.NotFoundError: "Model not found in this region. Check LLM_MODEL and AWS_REGION.",
     },
     "anthropic": {

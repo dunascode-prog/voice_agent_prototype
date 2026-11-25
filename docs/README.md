@@ -117,7 +117,7 @@ Generate random values for `INTERNAL_API_TOKEN` and `STREAM_TOKEN_SIGNING_KEY`, 
 The pipeline is the same either way; only the client changes. On Bedrock, requests are signed with your AWS credentials, so no `ANTHROPIC_API_KEY` is needed and no AWS keys go in `.env`.
 
 1. In the AWS console, open **Amazon Bedrock → Model access** in your region (default `us-east-1`) and enable **Claude Opus 5.5**. Anthropic models ask for a short use-case form the first time.
-2. Give your AWS identity permission to call it (`bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`; for a demo account, an admin user is fine).
+2. Give your AWS identity permission to call it. The SDK's Bedrock client uses Bedrock's Messages API endpoint (`bedrock-mantle`), which checks **`bedrock-mantle:CreateInference`** on `arn:aws:bedrock-mantle:<region>:<account>:project/default`, not `bedrock:InvokeModel`. Attach [`infra/iam/bedrock-claude-policy.json`](../infra/iam/bedrock-claude-policy.json) (replace `ACCOUNT_ID`) to the IAM user or role, or as an inline policy on the IAM Identity Center permission set if you sign in with SSO. An admin role also works.
 3. Log in with the AWS CLI and note the profile name: `aws configure sso` (preferred) or `aws configure`. Check it with `aws sts get-caller-identity --profile <name>`.
 4. In `.env`:
    ```bash
@@ -126,6 +126,7 @@ The pipeline is the same either way; only the client changes. On Bedrock, reques
    AWS_PROFILE=<name>          # leave empty to use the default credential chain
    LLM_MODEL=claude-opus-5-5   # the anthropic. prefix is added for Bedrock
    ```
+   Models older than Claude 4.7 (e.g. `LLM_MODEL=claude-opus-4-6`) work on Bedrock only with API version `2023-06-01`, which is what the pinned `anthropic` 1.x SDK sends. Keep the `anthropic[bedrock]<2` pin while using one: the 2.x SDK sends `2026-10-21`, which Bedrock accepts only for 4.7 and later.
 5. Check access before placing a call. This sends two short real requests (a few cents at most) shaped like the pipeline's, and prints time to first token and prompt-cache reads:
    ```bash
    uv run voice-llm-check
