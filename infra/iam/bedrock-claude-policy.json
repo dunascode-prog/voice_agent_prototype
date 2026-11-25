@@ -2,17 +2,25 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ClaudeOnBedrockMessagesApi",
+      "Sid": "InvokeClaudeThroughInferenceProfile",
       "Effect": "Allow",
-      "Action": "bedrock-mantle:CreateInference",
-      "Resource": "arn:aws:bedrock-mantle:us-east-1:ACCOUNT_ID:project/default"
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1:ACCOUNT_ID:inference-profile/us.anthropic.*",
+        "arn:aws:bedrock:*::foundation-model/anthropic.*"
+      ]
     },
     {
       "Sid": "ReadModelCatalog",
       "Effect": "Allow",
       "Action": [
         "bedrock:ListFoundationModels",
-        "bedrock:GetFoundationModel"
+        "bedrock:GetFoundationModel",
+        "bedrock:ListInferenceProfiles",
+        "bedrock:GetInferenceProfile"
       ],
       "Resource": "*"
     }

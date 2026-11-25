@@ -2,21 +2,23 @@
 
 Both providers use Pipecat's `AnthropicLLMService`, so the request shape (streaming,
 effort, prompt caching, tools) is identical. For Bedrock we hand it the Anthropic SDK's
-Bedrock client (`AsyncAnthropicBedrockMantle`, the Messages API on Bedrock), which signs
-requests with AWS SigV4 from the default credential chain: an `aws_profile` locally, the
-ECS task role in AWS. No AWS keys are stored in settings.
+`AsyncAnthropicBedrock` client, which calls Bedrock Runtime's InvokeModel API
+(`/model/{id}/invoke-with-response-stream`) and signs requests with AWS SigV4 from the
+default credential chain: an `aws_profile` locally, the ECS task role in AWS. No AWS keys
+are stored in settings. IAM needs `bedrock:InvokeModel` and
+`bedrock:InvokeModelWithResponseStream` (infra/iam/bedrock-claude-policy.json).
 """
 
-from anthropic import AsyncAnthropicBedrockMantle
+from anthropic import AsyncAnthropicBedrock
 from pipecat.services.anthropic.llm import AnthropicLLMService
 
 from voice_agent.config import Settings
 
 
-def make_llm_client(settings: Settings) -> AsyncAnthropicBedrockMantle | None:
+def make_llm_client(settings: Settings) -> AsyncAnthropicBedrock | None:
     """The SDK client for the configured provider, or None for the Claude API default."""
     if settings.llm_provider == "bedrock":
-        return AsyncAnthropicBedrockMantle(
+        return AsyncAnthropicBedrock(
             aws_region=settings.aws_region,
             aws_profile=settings.aws_profile or None,
         )
