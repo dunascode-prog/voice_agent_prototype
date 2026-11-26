@@ -51,10 +51,10 @@ def test_booking_prompt_has_disclosures():
 
 
 def test_pipeline_builds_on_bedrock(settings):
-    from anthropic import AsyncAnthropicBedrockMantle
+    from anthropic import AsyncAnthropicBedrock
 
     settings.llm_provider = "bedrock"
     start = StreamStart(stream_sid="MZ1", call_sid="CA123", account_sid="AC1")
     call = build_call_pipeline(SimpleNamespace(headers={}), start, settings)
     llm = next(p for p in call.pipeline.processors if isinstance(p, AnthropicLLMService))
-    assert isinstance(llm._client, AsyncAnthropicBedrockMantle)
+    assert isinstance(llm._client, AsyncAnthropicBedrock)

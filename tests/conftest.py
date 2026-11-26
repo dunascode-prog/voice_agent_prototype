@@ -44,6 +44,7 @@ def settings() -> Settings:
         llm_provider="anthropic",
         aws_region="us-east-1",
         aws_profile="",
+        bedrock_inference_profile="us",
     )
 
 

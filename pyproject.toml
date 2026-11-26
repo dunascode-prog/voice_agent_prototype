@@ -6,7 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pipecat-ai[anthropic,deepgram,cartesia,silero,websocket]>=1.17,<2",
-    # Claude on Amazon Bedrock (SigV4 signing via boto3)
+    # Claude on Amazon Bedrock (SigV4 signing via boto3). Keep <2 while any Bedrock model older
+    # than Claude 4.7 is used: 2.x sends API version 2026-10-21, which Bedrock rejects for them.
     "anthropic[bedrock]>=1.17,<2",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

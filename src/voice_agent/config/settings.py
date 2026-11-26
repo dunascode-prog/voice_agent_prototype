@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     llm_effort: str = "low"
     llm_max_tokens: int = 1024
     aws_region: str = "us-east-1"
+    # Bedrock InvokeModel serves current Claude models in us-east-1 only through a
+    # cross-region inference profile: "us" -> us.anthropic.<model>. "global" is the other
+    # option; empty = the bare in-region model id (only where the region supports it).
+    bedrock_inference_profile: str = "us"
     # Named profile from ~/.aws for local runs. Empty = default AWS credential chain
     # (env vars, SSO cache, or the ECS task role).
     aws_profile: str = ""
@@ -77,11 +81,16 @@ class Settings(BaseSettings):
 
     @property
     def llm_model_id(self) -> str:
-        """Model id as the provider expects it: Bedrock ids carry an `anthropic.` prefix."""
+        """Model id as the provider expects it.
+
+        On Bedrock: `claude-opus-5-5` -> `us.anthropic.claude-opus-5-5` (with the default
+        inference profile). An id that already contains `anthropic.` is used as is.
+        """
         model = self.llm_model
-        if self.llm_provider == "bedrock" and "anthropic." not in model:
-            return f"anthropic.{model}"
-        return model
+        if self.llm_provider != "bedrock" or "anthropic." in model:
+            return model
+        profile = self.bedrock_inference_profile.strip(".")
+        return f"{profile}.anthropic.{model}" if profile else f"anthropic.{model}"
 
     def required_for_calls(self) -> tuple[str, ...]:
         """Settings that must be set before the agent can take a call."""

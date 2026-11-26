@@ -117,19 +117,22 @@ Generate random values for `INTERNAL_API_TOKEN` and `STREAM_TOKEN_SIGNING_KEY`, 
 The pipeline is the same either way; only the client changes. On Bedrock, requests are signed with your AWS credentials, so no `ANTHROPIC_API_KEY` is needed and no AWS keys go in `.env`.
 
 1. In the AWS console, open **Amazon Bedrock → Model access** in your region (default `us-east-1`) and enable **Claude Opus 5.5**. Anthropic models ask for a short use-case form the first time.
-2. Give your AWS identity permission to call it (`bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`; for a demo account, an admin user is fine).
+2. Give your AWS identity permission to call it. The agent uses Bedrock Runtime's **InvokeModel** API (`AsyncAnthropicBedrock`), so it needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the inference profile and on the Anthropic foundation models it routes to. Attach [`infra/iam/bedrock-claude-policy.json`](../infra/iam/bedrock-claude-policy.json) (replace `ACCOUNT_ID`) to the IAM user or role, or as an inline policy on the IAM Identity Center permission set if you sign in with SSO. An admin role also works.
 3. Log in with the AWS CLI and note the profile name: `aws configure sso` (preferred) or `aws configure`. Check it with `aws sts get-caller-identity --profile <name>`.
 4. In `.env`:
    ```bash
    LLM_PROVIDER=bedrock
    AWS_REGION=us-east-1
    AWS_PROFILE=<name>          # leave empty to use the default credential chain
-   LLM_MODEL=claude-opus-5-5   # the anthropic. prefix is added for Bedrock
+   LLM_MODEL=claude-opus-5-5   # becomes us.anthropic.claude-opus-5-5
+   BEDROCK_INFERENCE_PROFILE=us   # or global; empty = bare in-region id
    ```
+   In `us-east-1`, InvokeModel serves current Claude models only through a cross-region inference profile, which is why the default adds `us.`. Bedrock model ids: Opus 5.5 = `claude-opus-5-5`, Opus 4.6 = `claude-opus-4-6-v1` (so `LLM_MODEL=claude-opus-4-6-v1` → `us.anthropic.claude-opus-4-6-v1`). A full id containing `anthropic.` is used unchanged.
+   Models older than Claude 4.7 (e.g. Opus 4.6) work on Bedrock only with API version `2023-06-01`, which is what the pinned `anthropic` 1.x SDK sends. Keep the `anthropic[bedrock]<2` pin while using one: the 2.x SDK sends `2026-10-21`, which Bedrock accepts only for 4.7 and later.
 5. Check access before placing a call. This sends two short real requests (a few cents at most) shaped like the pipeline's, and prints time to first token and prompt-cache reads:
    ```bash
    uv run voice-llm-check
-   # provider=bedrock in us-east-1 (profile demo) model=anthropic.claude-opus-5-5 effort=low
+   # provider=bedrock in us-east-1 (profile demo) model=us.anthropic.claude-opus-5-5 effort=low
    # cold: ttft=...ms total=...ms in=... cache_read=0 cache_write=... out=... stop=end_turn
    # warm: ttft=...ms ... cache_read=...
    ```
@@ -242,7 +245,8 @@ All variables are listed in [`../.env.example`](../.env.example). In AWS, secret
 | `DEEPGRAM_MODEL` / `DEEPGRAM_LANGUAGE` | agent | no | `nova-3` / `multi` |
 | `LLM_PROVIDER` | agent, worker | no | `anthropic` (Claude API, default) or `bedrock` (Amazon Bedrock, AWS credentials) |
 | `ANTHROPIC_API_KEY` | agent, worker | **yes** (if `anthropic`) | Claude API key; not needed on Bedrock |
-| `LLM_MODEL` | agent | no | `claude-opus-5-5`; on Bedrock the `anthropic.` prefix is added automatically (ids that already contain it, e.g. `us.anthropic.…` inference profiles, are used as is) |
+| `LLM_MODEL` | agent | no | `claude-opus-5-5`; on Bedrock it becomes `<BEDROCK_INFERENCE_PROFILE>.anthropic.<LLM_MODEL>` (Opus 4.6: `claude-opus-4-6-v1`). Ids that already contain `anthropic.` are used as is |
+| `BEDROCK_INFERENCE_PROFILE` | agent | no | Cross-region inference profile prefix for Bedrock: `us` (default) or `global`; empty = bare in-region model id |
 | `LLM_EFFORT` | agent | no | `low` for live turns |
 | `LLM_MAX_TOKENS` | agent | no | Max tokens per reply, default 1024 |
 | `LLM_FALLBACK_PROVIDER` | agent | no | Not used yet; automatic failover between providers comes later |
