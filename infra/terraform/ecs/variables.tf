@@ -23,7 +23,7 @@ variable "git_repo_url" {
 }
 
 variable "image_tag" {
-  description = "ECR image tag the services run. scripts/aws/deploy.py pushes both <sha> and latest."
+  description = "ECR image tag the services run. scripts/aws/deploy_ecs.py pushes both <sha> and latest."
   type        = string
   default     = "latest"
 }

@@ -1,6 +1,6 @@
 # Image build without local Docker: CodeBuild clones the public repo at a given ref,
 # builds infra/docker/Dockerfile and pushes <short-sha> and latest to ECR.
-# Started by scripts/aws/deploy.py (GIT_REF = the commit to build).
+# Started by scripts/aws/deploy_ecs.py (GIT_REF = the commit to build).
 
 resource "aws_ecr_repository" "app" {
   name                 = var.name
