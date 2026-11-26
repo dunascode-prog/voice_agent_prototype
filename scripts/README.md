@@ -1,5 +1,9 @@
 # scripts
 
-Dev helpers: ngrok tunnel bootstrap, Twilio number configuration, seed data, load-test drivers. `docs/build_pdf.py` regenerates `docs/Voice_Agent_Architecture.pdf`.
+| Script | What it does |
+|---|---|
+| `aws/push_secrets.py` | Copies the Twilio, Deepgram and Cartesia keys from `.env` into the AWS demo's `voice-agent/app` secret. Prints key names only |
+| `aws/deploy.py` | Builds the image in CodeBuild from the current (pushed) commit and rolls it out to the ECS services; `--restart-only` skips the build |
+| `docs/build_pdf.py` | Regenerates `docs/Voice_Agent_Architecture.pdf` |
 
-> Placeholder: no implementation yet. The design lives in `docs/ARCHITECTURE.md` and `docs/DATAFLOW.md` at the repo root.
+See `docs/README.md` → "Deploying the AWS demo".

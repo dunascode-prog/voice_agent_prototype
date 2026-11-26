@@ -23,8 +23,8 @@ jobs:
           version: "0.13.4"
           python-version: "3.12"
       - run: uv sync --frozen
-      - run: uv run ruff check src tests migrations
-      - run: uv run ruff format --check src tests migrations
+      - run: uv run ruff check src tests migrations scripts/aws
+      - run: uv run ruff format --check src tests migrations scripts/aws
       - run: uv run pytest
 
   postgres-redis:
@@ -79,3 +79,18 @@ jobs:
         run: |
           cp .env.example .env
           docker compose -f infra/docker/docker-compose.yml config --quiet
+
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.2"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate

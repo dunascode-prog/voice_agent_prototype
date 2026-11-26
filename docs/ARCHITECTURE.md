@@ -283,6 +283,8 @@ flowchart TB
 
 **Local development**: `docker compose` runs gateway, agent, worker, Postgres, Redis and LocalStack (S3, SQS). An ngrok tunnel exposes the gateway and agent to Twilio. See [README.md](README.md).
 
+**AWS demo (built)**: `infra/terraform` creates a reduced version of this diagram: CloudFront in place of Route 53 + WAF + an ACM certificate, single-AZ data stores, tasks in public subnets instead of behind NAT, and no worker or dialer yet (D14). See [README.md](README.md#deploying-the-aws-demo).
+
 ---
 
 ## 6. Key design decisions and trade-offs
@@ -474,3 +476,4 @@ These were open questions for a client. Because there is no client to ask, each 
 | D11 | Port numbers or buy new ones? | **Buy two new US local numbers**: one inbound and one outbound caller ID. The outbound number is registered in Twilio Trust Hub (STIR/SHAKEN, CNAM). | A real business with existing numbers |
 | D12 | AWS account and security conventions? | A **new AWS account** with our own Terraform conventions: one VPC, private subnets for all services, Secrets Manager for every secret, CloudTrail on, no public database endpoints. A lightweight security self-review (OWASP and LLM-specific checks) happens before any real caller is connected. | A client with existing AWS standards |
 | D13 | Which LLM provider for the AWS demo? | **Amazon Bedrock as primary**, so the demo runs in one AWS account with IAM roles and AWS billing and no Anthropic key. Same model and settings as the Claude API, which stays one setting away (`LLM_PROVIDER=anthropic`). Bedrock latency is checked with `voice-llm-check` and the per-turn LLM TTFT metrics against the D10 thresholds. | Bedrock TTFT clearly worse than the Claude API, or a need for features Bedrock lacks (fast mode, server-side refusal fallbacks) |
+| D14 | How is the AWS demo deployed, and how does Twilio reach it without a domain? | **Terraform in `infra/terraform`: ECS Fargate (gateway + agent) behind an ALB, fronted by CloudFront** for a free valid HTTPS/WSS address (`*.cloudfront.net`). The ALB admits only CloudFront's IP ranges plus a secret origin header. Cost-cut for a demo: single-AZ RDS and Redis, no NAT gateway (tasks in public subnets, security group admits only the ALB), no WAF, one task per service, 120 s call drain. Images are built by CodeBuild from GitHub, so no local Docker is needed. Deployed into the organization's management account because the member account's SCP blocks ECS and ELB (agreed for a short demo). | A real pilot: own domain (ACM + Route 53 + WAF), Multi-AZ, private subnets with NAT, a member account, remote Terraform state, 1800 s drain and agent autoscaling on active calls |
