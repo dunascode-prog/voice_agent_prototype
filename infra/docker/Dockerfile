@@ -1,5 +1,7 @@
 # One image for both services; the command picks gateway or agent.
-FROM python:3.12-slim AS base
+# CodeBuild passes the ECR Public mirror of the same image to avoid Docker Hub rate limits.
+ARG PYTHON_IMAGE=python:3.12-slim
+FROM ${PYTHON_IMAGE} AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

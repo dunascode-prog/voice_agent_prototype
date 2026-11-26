@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (gitignored) and adjust.
+aws_profile = "AdministratorAccess-<account-id>"
+region      = "us-east-1"
+llm_model   = "claude-sonnet-4-6"
+
+# 0 pauses the ECS tasks between demos.
+desired_count = 1

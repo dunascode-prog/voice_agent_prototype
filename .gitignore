@@ -38,5 +38,6 @@ scripts/docs/_build/
 infra/terraform/.terraform/
 *.tfstate
 *.tfstate.*
+*.tfplan
 *.tfvars
 !*.tfvars.example
