@@ -1,0 +1,31 @@
+# Override for the single-server AWS demo (infra/terraform/ec2). Used by voice-deploy:
+#   docker compose --env-file .env -f infra/docker/docker-compose.yml \
+#     -f infra/docker/docker-compose.aws.yml up -d --build
+# Differences from local: Caddy listens on port 80 and only serves requests carrying
+# CloudFront's X-Origin-Verify header, Postgres and Redis are not published on the
+# host, and everything restarts after a reboot.
+
+services:
+  postgres:
+    ports: !reset []
+    restart: unless-stopped
+
+  redis:
+    ports: !reset []
+    restart: unless-stopped
+
+  gateway:
+    restart: unless-stopped
+
+  agent:
+    restart: unless-stopped
+
+  proxy:
+    environment:
+      # Interpolated from the repo-root .env (voice-deploy passes --env-file .env).
+      ORIGIN_VERIFY: ${ORIGIN_VERIFY:?ORIGIN_VERIFY must be set}
+    volumes: !override
+      - ./Caddyfile.aws:/etc/caddy/Caddyfile:ro
+    ports: !override
+      - "80:8080"
+    restart: unless-stopped

@@ -1,8 +1,8 @@
-"""Build the image in CodeBuild and roll it out to the ECS services.
+"""Build the image in CodeBuild and roll it out to the ECS services (infra/terraform/ecs).
 
-    uv run python scripts/aws/deploy.py --profile AdministratorAccess-<account-id>
-    uv run python scripts/aws/deploy.py --profile ... --ref claude/some-branch
-    uv run python scripts/aws/deploy.py --profile ... --restart-only   # e.g. after push_secrets.py
+    uv run python scripts/aws/deploy_ecs.py --profile AdministratorAccess-<account-id>
+    uv run python scripts/aws/deploy_ecs.py --profile ... --ref claude/some-branch
+    uv run python scripts/aws/deploy_ecs.py --profile ... --restart-only  # after push_secrets
 
 CodeBuild clones the public GitHub repo, so the ref must be pushed. The default is the
 commit checked out locally (it must exist on GitHub).

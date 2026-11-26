@@ -2,7 +2,7 @@
 
 A real-time phone agent (inbound and outbound) built on **Python + Pipecat + Twilio Media Streams**, with **Deepgram** STT, **Claude** as the LLM, and **Cartesia** TTS (ElevenLabs as fallback), deployed as Docker containers on **AWS ECS Fargate**.
 
-> **Status: phase 2 + Bedrock + AWS demo.** A caller can phone the Twilio number and talk to the agent (Deepgram → Claude → Cartesia, with barge-in and smart-turn end-of-turn detection), and outbound calls can be started through the API. Every call is saved with its turns, redacted transcript, per-stage latency, token usage, status history and dual-channel recording. Claude runs either on the Claude API or on Amazon Bedrock (`LLM_PROVIDER`). The stack deploys to AWS with Terraform (ECS Fargate behind CloudFront and an ALB, see [Deploying the AWS demo](#deploying-the-aws-demo)). Not yet built: tools (calendar/CRM), transfers, voicemail detection, the post-call worker and the dialer.
+> **Status: phase 2 + Bedrock + AWS demo.** A caller can phone the Twilio number and talk to the agent (Deepgram → Claude → Cartesia, with barge-in and smart-turn end-of-turn detection), and outbound calls can be started through the API. Every call is saved with its turns, redacted transcript, per-stage latency, token usage, status history and dual-channel recording. Claude runs either on the Claude API or on Amazon Bedrock (`LLM_PROVIDER`). The stack deploys to AWS with Terraform behind CloudFront, either on one low-cost EC2 server or on ECS Fargate (see [Deploying the AWS demo](#deploying-the-aws-demo)). Not yet built: tools (calendar/CRM), transfers, voicemail detection, the post-call worker and the dialer.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -12,7 +12,8 @@ A real-time phone agent (inbound and outbound) built on **Python + Pipecat + Twi
 | 3 | Tools: Google Calendar + HubSpot, booking flow with idempotency | next |
 | 4 | Transfers, voicemail detection, campaign dialer | |
 | 5 | Worker: transcripts, redaction, LLM-judge scoring; simulated-caller evals | |
-| 6 | AWS demo: Terraform, ECS Fargate, CloudFront + ALB (HTTPS/WSS), RDS, ElastiCache, Secrets Manager, CodeBuild | **this PR** |
+| 6 | AWS demo: Terraform, ECS Fargate, CloudFront + ALB (HTTPS/WSS), RDS, ElastiCache, Secrets Manager, CodeBuild | done (PR #5) |
+| 6b | Low-cost AWS demo: one EC2 server running docker compose behind CloudFront | **this PR** |
 
 | Document | Contents |
 |---|---|
@@ -71,11 +72,13 @@ voice-agent-prototype/
 │   ├── scenarios/              # Caller personas + expected outcomes
 │   └── rubrics/                # LLM-judge rubrics, human QA checklists
 ├── infra/
-│   ├── docker/                 # Dockerfile, docker-compose, Caddy proxy (local dev)
+│   ├── docker/                 # Dockerfile, docker-compose, Caddy proxy (local dev; *.aws variants for the EC2 demo)
 │   ├── iam/                    # Bedrock policy for a developer's own AWS identity
-│   └── terraform/              # AWS demo: VPC, ECS, ALB, CloudFront, RDS, Redis, Secrets, CodeBuild
+│   └── terraform/
+│       ├── ec2/                # Low-cost AWS demo: one server + CloudFront (default)
+│       └── ecs/                # Production-shaped demo: Fargate, ALB, RDS, Redis, CodeBuild
 ├── scripts/
-│   ├── aws/                    # push_secrets.py, deploy.py (AWS demo)
+│   ├── aws/                    # push_secrets.py, deploy_ec2.py, deploy_ecs.py (AWS demo)
 │   └── docs/                   # build_pdf.py
 ├── pyproject.toml              # Dependencies (uv), ruff and pytest config
 ├── uv.lock                     # Locked dependency versions
@@ -224,7 +227,66 @@ Postgres schemas only change through Alembic. A test checks that the migrations 
 
 ## Deploying the AWS demo
 
-The demo runs the same image as local Docker, on ECS Fargate in `us-east-1`. Twilio reaches it through **CloudFront**, which provides a valid HTTPS and WSS address (`https://dxxxx.cloudfront.net`) with no domain or certificate to manage, so **ngrok is only needed for local runs**. Terraform lives in [`infra/terraform/`](../infra/terraform/).
+Twilio reaches the AWS demo through **CloudFront**, which provides a valid HTTPS and WSS address (`https://dxxxx.cloudfront.net`) with no domain or certificate to manage, so **ngrok is only needed for local runs**. There are two Terraform stacks. They create resources with the same names, so apply **one** of them:
+
+| | [`infra/terraform/ec2`](../infra/terraform/ec2/) (**default, low cost**) | [`infra/terraform/ecs`](../infra/terraform/ecs/) (production-shaped) |
+|---|---|---|
+| Runs on | One EC2 `t3.small` running the local `docker compose` stack (Caddy, gateway, agent, Postgres, Redis) | ECS Fargate gateway + agent behind an ALB, RDS Postgres, ElastiCache Redis |
+| Cost while running | **about $21 a month** (instance $15, public IP $3.65, disk $1.60, secrets $0.80); about $6 while the instance is stopped | about $100–110 a month |
+| Deploys | `scripts/aws/deploy_ec2.py`: the server pulls the commit and rebuilds (SSM, no SSH) | `scripts/aws/deploy_ecs.py`: CodeBuild builds the image, ECS rolls it out |
+| Use when | Demos and testing (decision D15) | A pilot that needs managed databases and rolling deploys (D14) |
+
+### Low-cost demo on one server (`infra/terraform/ec2`)
+
+```text
+Twilio ──HTTPS webhooks / WSS media──> CloudFront ──HTTP + X-Origin-Verify──> EC2 :80
+   EC2 (Elastic IP, port 80 open to CloudFront only, no SSH):
+     Caddy ── /media ──> agent ──> Deepgram, Bedrock (Claude), Cartesia
+           └─ /*     ──> gateway
+     Postgres + Redis containers (data on the instance's disk)
+   secrets: Secrets Manager -> .env on the server, rewritten on every deploy
+```
+
+You need Terraform 1.9+, the AWS CLI, an **admin** AWS CLI profile (the Bedrock-only role can't create infrastructure) and Bedrock model access for `llm_model` in `us-east-1` (default `claude-sonnet-4-6`).
+
+1. **Log in:** `aws sso login --profile AdministratorAccess-<account-id>`
+2. **Create the infrastructure** (about 5–10 minutes, mostly CloudFront):
+   ```bash
+   cd infra/terraform/ec2
+   cp terraform.tfvars.example terraform.tfvars   # set aws_profile
+   terraform init
+   terraform apply
+   ```
+   On first boot the server installs Docker and clones the repo. The app starts in step 4.
+3. **Store the provider keys.** Fill the Twilio, Deepgram and Cartesia values in your local `.env`, then copy them into Secrets Manager (key names are printed, values never are):
+   ```bash
+   uv run python scripts/aws/push_secrets.py --profile AdministratorAccess-<account-id>
+   ```
+   `INTERNAL_API_TOKEN`, `STREAM_TOKEN_SIGNING_KEY`, the CloudFront origin header and the non-secret settings (`PUBLIC_BASE_URL`, `LLM_MODEL`, …) are written by Terraform into the `voice-agent/internal` secret.
+4. **Deploy.** The server checks out your current commit from GitHub (push it first), writes its `.env` from both secrets and rebuilds the stack. The first run takes about 5 minutes, later ones less:
+   ```bash
+   uv run python scripts/aws/deploy_ec2.py --profile AdministratorAccess-<account-id>
+   ```
+   Re-run it after every code change and after `push_secrets.py`. `--ref <branch>` deploys another branch.
+5. **Point Twilio at it.** `terraform output` prints `twilio_voice_webhook` and `twilio_status_webhook`. Set them on the number (both **HTTP POST**) as in step 4 of the local setup. Check the stack is up with `curl https://dxxxx.cloudfront.net/healthz`.
+6. **Call the number.** For logs, open a shell on the server and follow the compose logs:
+   ```bash
+   aws ssm start-session --target "$(terraform output -raw instance_id)" --profile AdministratorAccess-<account-id>
+   sudo docker compose -f /opt/voice-agent/infra/docker/docker-compose.yml logs -f agent gateway
+   ```
+   (`start-session` needs the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) for the AWS CLI.)
+7. **Outbound calls** use the generated token:
+   ```bash
+   TOKEN=$(aws secretsmanager get-secret-value --secret-id voice-agent/internal \
+     --query SecretString --output text --profile AdministratorAccess-<account-id> | jq -r .INTERNAL_API_TOKEN)
+   curl -X POST "$(terraform -chdir=infra/terraform/ec2 output -raw public_base_url)/calls/outbound" \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"to": "+1..."}'
+   ```
+8. **Between demos:** stop the instance (`aws ec2 stop-instances --instance-ids <id>`; about $6 a month while stopped, and the Elastic IP keeps the CloudFront origin valid). Start it again and the stack comes back by itself. `terraform destroy` removes everything, including the call database on the instance.
+
+Demo trade-offs: one server, so a reboot or deploy drops live calls, and the database lives on the instance's disk with no backups. `t3.small` has burstable CPU: fine for a few calls at a time, `instance_type = "t3.medium"` for more.
+
+### Production-shaped demo on ECS Fargate (`infra/terraform/ecs`)
 
 ```text
 Twilio ──HTTPS webhooks / WSS media──> CloudFront ──HTTP + secret header──> ALB
@@ -234,62 +296,30 @@ Twilio ──HTTPS webhooks / WSS media──> CloudFront ──HTTP + secret he
    secrets: Secrets Manager -> ECS env vars    image: CodeBuild (from GitHub) -> ECR    logs: CloudWatch
 ```
 
-Demo trade-offs compared with the production design in [ARCHITECTURE.md](ARCHITECTURE.md) §5 (decision D14): single-AZ database and cache, no NAT gateway (tasks sit in public subnets with public IPs, and their security group admits only the ALB), no WAF, one task per service, and a 120 s call drain on deploys instead of 1800 s.
+Trade-offs compared with the production design in [ARCHITECTURE.md](ARCHITECTURE.md) §5 (decision D14): single-AZ database and cache, no NAT gateway (tasks sit in public subnets with public IPs, and their security group admits only the ALB), no WAF, one task per service, and a 120 s call drain on deploys instead of 1800 s.
 
-**Cost while running:** roughly $100–110 a month (Fargate about $45, ALB about $18, RDS about $14, Redis about $12, public IPv4 addresses about $15, the rest under $5), plus per-call provider usage. `desired_count = 0` in `terraform.tfvars` stops the tasks between demos (saves about $50 a month); `terraform destroy` removes everything.
+**Cost while running:** roughly $100–110 a month (Fargate about $45, ALB about $18, RDS about $14, Redis about $12, public IPv4 addresses about $15, the rest under $5). `desired_count = 0` in `terraform.tfvars` stops the tasks between demos (saves about $50 a month).
 
-### Steps
+Steps are the same as above with these differences: run Terraform in `infra/terraform/ecs` (about 15 minutes, mostly RDS); the services' tasks fail until the first image exists; deploy with `uv run python scripts/aws/deploy_ecs.py --profile ...` (add `--restart-only` after changing only secrets); logs are in CloudWatch: `aws logs tail /ecs/voice-agent --follow --profile ...`.
 
-You need Terraform 1.9+, the AWS CLI, an **admin** AWS CLI profile (the Bedrock-only role can't create infrastructure) and Bedrock model access for `llm_model` in `us-east-1` (default `claude-sonnet-4-6`).
-
-1. **Log in:** `aws sso login --profile AdministratorAccess-<account-id>`
-2. **Create the infrastructure** (about 15 minutes, mostly RDS and CloudFront):
-   ```bash
-   cd infra/terraform
-   cp terraform.tfvars.example terraform.tfvars   # set aws_profile
-   terraform init
-   terraform apply
-   ```
-   The services start before an image exists, so their tasks fail until step 4. That is expected.
-3. **Store the provider keys.** Fill the Twilio, Deepgram and Cartesia values in your local `.env`, then copy them into Secrets Manager (key names are printed, values never are):
-   ```bash
-   uv run python scripts/aws/push_secrets.py --profile AdministratorAccess-<account-id>
-   ```
-   The database URL, `INTERNAL_API_TOKEN` and `STREAM_TOKEN_SIGNING_KEY` are generated by Terraform into the `voice-agent/internal` secret.
-4. **Build and deploy the image.** CodeBuild clones the public GitHub repo at your current commit (push it first), pushes the image to ECR and restarts both services:
-   ```bash
-   uv run python scripts/aws/deploy.py --profile AdministratorAccess-<account-id>
-   ```
-   Re-run it after every change. After changing only secrets, add `--restart-only`.
-5. **Point Twilio at it.** `terraform output` prints `twilio_voice_webhook` and `twilio_status_webhook`. Set them on the number (both **HTTP POST**) as in step 4 of the local setup.
-6. **Call the number.** Follow the logs with:
-   ```bash
-   aws logs tail /ecs/voice-agent --follow --profile AdministratorAccess-<account-id>
-   ```
-7. **Outbound calls** use the generated token:
-   ```bash
-   TOKEN=$(aws secretsmanager get-secret-value --secret-id voice-agent/internal \
-     --query SecretString --output text --profile AdministratorAccess-<account-id> | jq -r .INTERNAL_API_TOKEN)
-   curl -X POST "$(terraform -chdir=infra/terraform output -raw public_base_url)/calls/outbound" \
-     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"to": "+1..."}'
-   ```
-
-Terraform state is local (`infra/terraform/terraform.tfstate`, gitignored) and contains the generated passwords, so keep it on the machine that ran `apply`. Move it to an S3 backend before anyone else runs Terraform.
+Both stacks keep Terraform state locally (`terraform.tfstate` in the stack's folder, gitignored). It contains the generated secrets, so keep it on the machine that ran `apply`, and move it to an S3 backend before anyone else runs Terraform.
 
 ### Troubleshooting the AWS demo
 
 | Symptom | Likely cause |
 |---|---|
-| Tasks stop with `ResourceInitializationError` mentioning secrets | `terraform apply` didn't finish, or the secret was deleted. Re-run `apply` |
-| Tasks stop with `CannotPullContainerError` | No image yet: run `scripts/aws/deploy.py` |
-| CodeBuild fails at `git fetch` | The commit isn't on GitHub yet: `git push` it, or pass `--ref <branch>` |
-| `https://dxxxx.cloudfront.net/healthz` returns 403 `forbidden` | The request reached the ALB without CloudFront's header (wait for the distribution to finish deploying) |
-| Calls connect but the agent is silent | `push_secrets.py` not run, or the services weren't restarted after it (`deploy.py --restart-only`). Check the agent log for `missing config` |
-| `AccessDeniedException` from Bedrock in the agent log | Model access not enabled for `llm_model`, or `llm_model` changed without `terraform apply` (the task role allows only that model) |
+| `deploy_ec2.py` says no running instance | The instance is stopped (start it), or `terraform apply` hasn't run |
+| `deploy_ec2.py` fails at `git fetch` (or CodeBuild does) | The commit isn't on GitHub yet: `git push` it, or pass `--ref <branch>` |
+| `deploy_ec2.py` fails with `docker: command not found` right after `apply` | First-boot setup is still running (a few minutes). Retry |
+| `https://dxxxx.cloudfront.net/healthz` returns 403 `forbidden` | The request reached the server or ALB without CloudFront's header: wait for the distribution to finish deploying |
+| CloudFront returns 502/504 | The stack isn't running yet (EC2: run `deploy_ec2.py`; ECS: run `deploy_ecs.py`) |
+| ECS tasks stop with `ResourceInitializationError` or `CannotPullContainerError` | Secrets missing (re-run `apply`) or no image yet (`deploy_ecs.py`) |
+| Calls connect but the agent is silent | `push_secrets.py` not run, or no deploy since (EC2: `deploy_ec2.py`; ECS: `deploy_ecs.py --restart-only`). Check the agent log for `missing config` |
+| `AccessDeniedException` from Bedrock in the agent log | Model access not enabled for `llm_model`, or `llm_model` changed without `terraform apply` (the role allows only that model) |
 
 ## Environment variables
 
-All variables are listed in [`../.env.example`](../.env.example). In AWS, secrets come from **Secrets Manager** (injected into ECS task definitions), not from files: third-party keys from `voice-agent/app` (filled by `scripts/aws/push_secrets.py`), and `DATABASE_URL`, `INTERNAL_API_TOKEN` and `STREAM_TOKEN_SIGNING_KEY` from `voice-agent/internal` (generated by Terraform). The other variables are set in the task definitions (`infra/terraform/ecs.tf`).
+All variables are listed in [`../.env.example`](../.env.example). In AWS, values come from **Secrets Manager**: third-party keys from `voice-agent/app` (filled by `scripts/aws/push_secrets.py`) and generated tokens from `voice-agent/internal` (Terraform). On the EC2 demo the server writes both into its `.env` on each deploy (`voice-agent/internal` also carries the non-secret settings); on ECS they are injected into the task definitions, and the other variables are set in `infra/terraform/ecs/ecs.tf`.
 
 | Variable | Service(s) | Secret? | Description |
 |---|---|---|---|

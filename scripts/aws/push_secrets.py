@@ -2,10 +2,10 @@
 
     uv run python scripts/aws/push_secrets.py --profile AdministratorAccess-<account-id>
 
-Reads only the keys the containers need from Secrets Manager (see
-infra/terraform/secrets.tf), refuses placeholders from .env.example, and prints key
-names only, never values. Restart the services afterwards (scripts/aws/deploy.py
---restart-only) so running tasks pick up the new values.
+Reads only the keys the containers need from Secrets Manager (both Terraform stacks
+create the same `voice-agent/app` secret), refuses placeholders from .env.example, and
+prints key names only, never values. Deploy afterwards so the new values are used:
+scripts/aws/deploy_ec2.py, or scripts/aws/deploy_ecs.py --restart-only.
 """
 
 import argparse

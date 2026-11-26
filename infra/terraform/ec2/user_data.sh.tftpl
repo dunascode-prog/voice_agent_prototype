@@ -1,0 +1,56 @@
+#!/bin/bash
+# First boot: Docker + compose, swap, the repo, and the voice-deploy command.
+# Rendered by Terraform (templatefile): name, region and repo_url are substituted;
+# $${...} is written as a literal bash $${...}.
+set -euxo pipefail
+
+dnf install -y docker git jq
+systemctl enable --now docker
+
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64
+curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-buildx \
+  https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-buildx
+
+# 2 GB swap: headroom for the image build and for bursts on a 2 GB instance.
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=2048
+  chmod 600 /swapfile
+  mkswap /swapfile
+  echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+fi
+swapon -a
+
+if [ ! -d /opt/voice-agent/.git ]; then
+  git clone --quiet ${repo_url} /opt/voice-agent
+fi
+
+cat > /usr/local/bin/voice-deploy <<'SCRIPT'
+#!/bin/bash
+# voice-deploy [git-ref]: check out the ref, write .env from Secrets Manager, rebuild
+# and restart the compose stack. Run by scripts/aws/deploy_ec2.py through SSM.
+set -euo pipefail
+export HOME=/root # SSM runs commands without HOME; git and docker need it
+REF="$${1:-main}"
+cd /opt/voice-agent
+git fetch --quiet origin "$REF"
+git checkout --quiet --force FETCH_HEAD
+
+umask 077
+for s in internal app; do
+  aws secretsmanager get-secret-value --region ${region} --secret-id "${name}/$s" \
+    --query SecretString --output text | jq -r 'to_entries[] | "\(.key)=\(.value)"'
+done > .env.new
+mv .env.new .env
+grep -q '^ORIGIN_VERIFY=.' .env || { echo "ORIGIN_VERIFY missing from ${name}/internal" >&2; exit 1; }
+
+docker compose --env-file .env -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.aws.yml \
+  up -d --build --remove-orphans
+docker image prune -f > /dev/null
+echo "deployed $(git rev-parse --short HEAD)"
+SCRIPT
+chmod 755 /usr/local/bin/voice-deploy
+
+echo "voice-agent bootstrap done"
